@@ -1,0 +1,23 @@
+# Concurso Radar — dependencias del proyecto
+# Se instalan dentro del entorno virtual (venv):
+#   pip install -r requirements.txt
+#
+# La capa de base de datos (Fase 1, primera entrega) NO requiere ninguna de
+# estas: corre solo con la librería estándar de Python. Estas dependencias
+# se usan a medida que avanzan las fases.
+
+PyYAML>=6.0                 # leer el archivo de configuración settings.yaml
+apify-client>=3.0           # cliente de Apify (búsqueda de posts en Instagram)
+requests>=2.31              # envío de alertas y heartbeat a la API de Telegram
+APScheduler>=3.10           # ciclos automáticos de búsqueda
+tzdata>=2024.1              # base de zonas horarias (necesaria para APScheduler en Windows)
+
+# Fase de comandos interactivos (/pausar, /buscar), más adelante:
+# python-telegram-bot>=21.0   # solo se necesita para RECIBIR comandos de Telegram
+
+# Fase 2 (clasificación y resumen con IA), se agrega más adelante:
+# anthropic>=0.40           # cliente de la API de Anthropic (Claude Haiku)
+
+# Nota: tras instalar, conviene fijar las versiones exactas con:
+#   pip freeze > requirements.txt
+# para que el install.py reproduzca el mismo entorno en el PC del cliente.

@@ -1,0 +1,92 @@
+# ===========================================================================
+# Concurso Radar — Plantilla de configuración
+# ---------------------------------------------------------------------------
+# COPIA este archivo como "settings.yaml" en esta misma carpeta y rellena
+# los valores. El archivo real (settings.yaml) está excluido de Git porque
+# contiene secretos; esta plantilla sí se versiona como referencia.
+#
+#   Windows (PowerShell):  Copy-Item config\settings.example.yaml config\settings.yaml
+#   Linux / macOS:         cp config/settings.example.yaml config/settings.yaml
+# ===========================================================================
+
+# --- Credenciales (pegar los tokens reales en settings.yaml) ---------------
+apify:
+  token: ""              # API token de Apify (empieza con "apify_api_...")
+  actor_id: ""           # ID del actor: apify/instagram-post-scraper → buscar en apify.com/apify/instagram-post-scraper
+
+telegram:
+  bot_token: ""          # Token del bot creado con @BotFather
+  chat_id: ""            # chat_id destino (el tuyo para pruebas; el del cliente en producción)
+
+# Reservado para la Fase 2 (clasificación con IA). Dejar vacío por ahora.
+anthropic:
+  api_key: ""
+
+# --- Cuentas de Instagram a monitorear -------------------------------------
+# Esta lista cambia con el tiempo: agregar o quitar cuentas aquí.
+cuentas:
+  - antioquenobog
+  - falabella_co
+  - mallplazaco
+  - smirnoffco
+  - altoque_terpel
+  - elcorraloficial
+  - dominospizzacol
+  - umusiccolombia
+  - sonymusiccol
+  - davivienda
+  - homecenter_co
+  - bancolombia
+
+# --- Filtro por palabras clave (Fase 1) ------------------------------------
+# Un post es candidato si su texto contiene ALGUNA palabra de `incluir`
+# y NINGUNA de `excluir`. La comparación ignora mayúsculas y tildes.
+keywords:
+  incluir:
+    - participa
+    - gana
+    - sorteo
+    - concurso
+    - dinamica
+    - aplican t&c
+    - terminos y condiciones
+  excluir:
+    - vacante
+    - empleo
+    - contratamos
+    - webinar
+    - curso
+
+# --- Parámetros de búsqueda (controlan el costo en Apify) ------------------
+busqueda:
+  posts_por_cuenta: 5       # con el filtro de fecha activo, el costo lo controla la VENTANA,
+                            # no este número, así que se sube para no perder posts en cuentas
+                            # muy activas. OJO: si vacías el filtro de abajo, baja esto a 2-3.
+  intervalo_minutos: 60     # OBSOLETO (era de APScheduler). El horario lo manda ahora el
+                            # Programador de Tareas; las horas se configuran en install.py (HORAS).
+  solo_posts_mas_nuevos_que: "70 minutes"   # filtro de fecha (onlyPostsNewerThan). Trae solo posts
+                                            # de la última hora aprox. (un poco más que el intervalo,
+                                            # para no perder posts en el borde). Esto es lo que mantiene
+                                            # el costo en ~$3-4/mes. Vacío = sin filtro (caro).
+  saltar_posts_fijados: true                # skipPinnedPosts. IMPRESCINDIBLE: el actor, por defecto,
+                                            # devuelve los posts FIJADOS de cada cuenta ignorando el
+                                            # filtro de fecha, lo que dispara el costo. En true, los omite.
+
+# --- Control de presupuesto ------------------------------------------------
+presupuesto:
+  limite_diario_usd: 0.30           # techo de gasto/día; si se supera, pausa y avisa
+  costo_por_mil_resultados_usd: 2.70  # tarifa del actor EN USO. Oficial apify/instagram-scraper ≈ 2.70;
+                                      # actores económicos (apidojo/sones) ≈ 0.30–0.50. Ajustar al actor elegido.
+
+# --- Heartbeat (mensaje de "sigo activo") ----------------------------------
+heartbeat:
+  activo: true
+  hora: "20:00"             # si no hubo novedades en el día, avisa a esta hora que sigue vivo
+
+# --- Base de datos y logs --------------------------------------------------
+base_datos:
+  ruta: "storage/monitor.db"
+
+logs:
+  ruta: "logs/system.log"
+  retener_semanas: 4

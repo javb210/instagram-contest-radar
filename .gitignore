@@ -1,0 +1,34 @@
+# --- Secretos: el archivo de configuración real NUNCA va a Git -------------
+config/settings.yaml
+
+# --- Base de datos local ---------------------------------------------------
+*.db
+storage/*.db
+
+# --- Logs ------------------------------------------------------------------
+logs/*.log
+
+# --- Artefactos generados por install.py -----------------------------------
+start_radar.bat
+_tarea_concurso_radar.xml
+
+# --- Entorno virtual de Python ---------------------------------------------
+venv/
+.venv/
+env/
+
+# --- Caché de Python -------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Configuración de editores / SO ---------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Contexto de trabajo con Claude Code: solo local, no se publica ---------
+CLAUDE.md
+docs/
