@@ -64,6 +64,9 @@ busqueda:
                             # muy activas. OJO: si vacías el filtro de abajo, baja esto a 2-3.
   intervalo_minutos: 60     # OBSOLETO (era de APScheduler). El horario lo manda ahora el
                             # Programador de Tareas; las horas se configuran en install.py (HORAS).
+  min_horas_entre_corridas: 5   # candado anti-costo: si la última corrida exitosa fue hace
+                                # menos de esto, se omite (ej. la disparada por inicio de sesión).
+                                # Debe ser MENOR que la separación entre HORAS (11:00-18:00 = 7h).
   solo_posts_mas_nuevos_que: "70 minutes"   # filtro de fecha (onlyPostsNewerThan). Trae solo posts
                                             # de la última hora aprox. (un poco más que el intervalo,
                                             # para no perder posts en el borde). Esto es lo que mantiene

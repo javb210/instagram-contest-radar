@@ -50,10 +50,10 @@ Cada archivo indica entre paréntesis la fase en la que se implementa.
 
 ```
 concurso-radar/
-├── main.py                      # punto de entrada / orquestación general
-├── scheduler.py                 # ciclos automáticos cada N min (fase posterior)
+├── main.py                      # punto de entrada: corre UN ciclo y termina  ✓
+├── scheduler.py                 # orquesta un ciclo (corrida única)  ✓
 ├── watchdog.py                  # vigila que main siga vivo (robustez)
-├── install.py                   # instalador Windows + Task Scheduler (entrega)
+├── install.py                   # instalador Windows + Task Scheduler (horas fijas)  ✓
 ├── config/
 │   └── settings.example.yaml    # plantilla; copiar a settings.yaml (no versionado)
 ├── searchers/

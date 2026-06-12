@@ -138,6 +138,37 @@ def crear_bat() -> None:
     print(f"[OK] Generado {START_BAT.name} (atajo de arranque manual).")
 
 
+# GUID de "Permitir temporizadores de reactivación" (subgrupo Suspender de powercfg).
+_GUID_WAKE_TIMERS = "BD3B718A-0680-4D9D-8AB2-E1D2B4AC806D"
+
+
+def habilitar_wake_timers() -> None:
+    """
+    Permite los temporizadores de reactivación en el plan de energía activo (en
+    corriente alterna y en batería). Sin esto, `WakeToRun` no puede despertar el
+    PC para correr la tarea a la hora. Best-effort: si powercfg falla, solo avisa.
+    """
+    ok = True
+    for verbo in ("/setacvalueindex", "/setdcvalueindex"):
+        r = subprocess.run(
+            ["powercfg", verbo, "SCHEME_CURRENT", "SUB_SLEEP", _GUID_WAKE_TIMERS, "1"],
+            capture_output=True, text=True, check=False,
+        )
+        ok = ok and r.returncode == 0
+    r = subprocess.run(
+        ["powercfg", "/setactive", "SCHEME_CURRENT"],
+        capture_output=True, text=True, check=False,
+    )
+    ok = ok and r.returncode == 0
+    if ok:
+        print("[OK] Temporizadores de reactivación habilitados (CA y batería).")
+    else:
+        print(
+            "[!] No se pudieron habilitar los temporizadores de reactivación. "
+            "WakeToRun podría no despertar el PC. Revisa la configuración de energía."
+        )
+
+
 def _triggers_xml(horas: list[str]) -> str:
     """
     Construye los disparadores por hora (un `CalendarTrigger` diario por cada hora
@@ -165,7 +196,11 @@ def construir_xml() -> str:
     """
     Construye el XML de la tarea. Incluye:
       - CalendarTrigger por cada hora de HORAS: dispara a horas fijas, todos los días.
-      - StartWhenAvailable: si el PC estaba apagado a la hora, recupera la corrida.
+      - LogonTrigger: respaldo al iniciar sesión (cubre PC apagado a la hora). El
+        candado `min_horas_entre_corridas` (scheduler.py) evita gasto extra.
+      - WakeToRun: despierta el PC suspendido para correr a la hora (requiere wake
+        timers habilitados, lo hace `habilitar_wake_timers`).
+      - StartWhenAvailable: recuperación adicional si el PC estaba no disponible.
       - RunLevel HighestAvailable: privilegios altos disponibles.
       - WorkingDirectory: la raíz del proyecto (rutas relativas funcionan).
       - RestartOnFailure: hasta 2 reintentos, uno por minuto, si main.py falla.
@@ -176,6 +211,16 @@ def construir_xml() -> str:
     comando = _escapar_xml(str(pythonw_exe()))
     argumentos = _escapar_xml(f'"{MAIN_PY}"')
     directorio = _escapar_xml(str(RAIZ))
+
+    # Disparadores por hora + un LogonTrigger de respaldo (red de seguridad para
+    # cuando el PC estaba apagado a la hora). El gasto extra lo evita el candado
+    # `min_horas_entre_corridas` en scheduler.py.
+    triggers = _triggers_xml(HORAS) + "\n" + (
+        "    <LogonTrigger>\n"
+        "      <Enabled>true</Enabled>\n"
+        f"      <UserId>{usuario}</UserId>\n"
+        "    </LogonTrigger>"
+    )
 
     plantilla = textwrap.dedent(
         """\
@@ -210,7 +255,7 @@ def construir_xml() -> str:
             <Enabled>true</Enabled>
             <Hidden>false</Hidden>
             <RunOnlyIfIdle>false</RunOnlyIfIdle>
-            <WakeToRun>false</WakeToRun>
+            <WakeToRun>true</WakeToRun>
             <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
             <Priority>7</Priority>
             <RestartOnFailure>
@@ -230,7 +275,7 @@ def construir_xml() -> str:
     )
     return plantilla.format(
         NOMBRE_TAREA=NOMBRE_TAREA,
-        triggers=_triggers_xml(HORAS),
+        triggers=triggers,
         usuario=usuario,
         comando=comando,
         argumentos=argumentos,
@@ -246,6 +291,7 @@ def instalar() -> None:
         sys.exit(1)
 
     crear_bat()
+    habilitar_wake_timers()
 
     # El Programador de Tareas espera el XML en UTF-16; lo escribimos con esa
     # codificación (write_text con 'utf-16' añade el BOM correcto).
@@ -286,10 +332,13 @@ def instalar() -> None:
 
             Qué pasa ahora:
               - El sistema corre solo a las {horas_txt} (hora local), todos los días.
-              - Cada corrida revisa las cuentas y termina; no queda nada abierto.
-              - Corre en segundo plano, sin ventana (proceso pythonw.exe).
-              - Si el PC estaba apagado a esa hora, la corrida se ejecuta apenas lo
-                prendas e inicies sesión (recuperación automática).
+              - Si el PC está suspendido a esa hora, se DESPIERTA solo para correr
+                (WakeToRun) y vuelve a dormir. Funciona enchufado o en batería.
+              - Si el PC estaba APAGADO a la hora, la corrida se ejecuta apenas lo
+                prendas e inicies sesión (disparador de respaldo por inicio de sesión).
+                Ese respaldo no gasta de más: se omite si ya hubo una corrida reciente
+                (candado 'min_horas_entre_corridas' en settings.yaml).
+              - Cada corrida revisa las cuentas y termina; corre sin ventana (pythonw.exe).
               - Si una corrida falla, Windows la reintenta hasta 2 veces (1 min entre cada una).
 
             Para verificar:

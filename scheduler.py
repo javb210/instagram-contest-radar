@@ -200,6 +200,28 @@ def _construir_componentes(
     return db, buscador, notificador, tracker
 
 
+def _corrida_demasiado_reciente(config: dict, db: BaseDatos) -> bool:
+    """
+    Devuelve True si la última corrida EXITOSA fue hace menos de
+    `busqueda.min_horas_entre_corridas`.
+
+    Es el candado anti-costo del disparador por inicio de sesión: ese disparador
+    es una red de seguridad (cubre cuando se perdió una corrida programada porque
+    el PC estaba apagado), pero no debe gastar de más si una corrida reciente ya
+    cubrió la ventana. Como `ultima_corrida_utc` solo se actualiza al terminar un
+    ciclo con búsqueda exitosa, una corrida fallida o pausada por presupuesto no
+    cuenta (y por tanto no bloquea el reintento).
+    """
+    min_horas = config["busqueda"].get("min_horas_entre_corridas", 0)
+    if not min_horas:
+        return False
+    ultima = db.leer_estado("ultima_corrida_utc")
+    if not ultima:
+        return False
+    transcurrido = datetime.now(timezone.utc) - datetime.fromisoformat(ultima)
+    return transcurrido < timedelta(hours=float(min_horas))
+
+
 def _heartbeat_si_toca(
     config: dict,
     db: BaseDatos,
@@ -239,8 +261,16 @@ def correr_una_vez() -> dict:
     mantener_despierto()
     try:
         db, buscador, notificador, tracker = _construir_componentes(config)
-        resumen = ejecutar_ciclo(config, db, buscador, notificador, tracker)
-        _heartbeat_si_toca(config, db, notificador, tracker)
+        if _corrida_demasiado_reciente(config, db):
+            resumen = {"posts": 0, "nuevos": 0, "alertas": 0, "estado": "omitido_reciente"}
+            log.info(
+                "Se omite esta corrida: hubo una exitosa hace menos de %s h "
+                "(candado anti-costo del disparador por inicio de sesión).",
+                config["busqueda"].get("min_horas_entre_corridas", 0),
+            )
+        else:
+            resumen = ejecutar_ciclo(config, db, buscador, notificador, tracker)
+            _heartbeat_si_toca(config, db, notificador, tracker)
     finally:
         liberar()
 
