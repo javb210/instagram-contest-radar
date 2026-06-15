@@ -64,8 +64,13 @@ busqueda:
                             # muy activas. OJO: si vacías el filtro de abajo, baja esto a 2-3.
   intervalo_minutos: 60     # OBSOLETO (era de APScheduler). El horario lo manda ahora el
                             # Programador de Tareas; las horas se configuran en install.py (HORAS).
-  min_horas_entre_corridas: 5   # candado anti-costo: si la última corrida exitosa fue hace
-                                # menos de esto, se omite (ej. la disparada por inicio de sesión).
+  max_corridas_por_dia: 2   # TOPE DURO de búsquedas pagadas por día. Es la palanca de costo:
+                            # aunque haya varios disparos (slots fijos + inicio de sesión), nunca
+                            # se pagan más de esto. Cuenta solo corridas EXITOSAS (no fallidas/pausadas).
+  min_horas_entre_corridas: 5   # SEPARACIÓN mínima entre corridas. Si un slot cae dentro de esta
+                                # ventana se omite (estado 'omitido_reciente'); el slot de tarde extra
+                                # (install.py:HORAS, ej. 20:00) lo repone una vez pasada la separación,
+                                # garantizando la 2.ª corrida del día aun si el PC arrancó en la tarde.
                                 # Debe ser MENOR que la separación entre HORAS (11:00-18:00 = 7h).
   solo_posts_mas_nuevos_que: "70 minutes"   # filtro de fecha (onlyPostsNewerThan). Trae solo posts
                                             # de la última hora aprox. (un poco más que el intervalo,
@@ -84,7 +89,16 @@ presupuesto:
 # --- Heartbeat (mensaje de "sigo activo") ----------------------------------
 heartbeat:
   activo: true
-  hora: "20:00"             # si no hubo novedades en el día, avisa a esta hora que sigue vivo
+  hora: "20:00"             # informativo. En el modelo de corrida única el heartbeat se manda en la
+                            # PRIMERA corrida del día (no a esta hora); el horario real lo fija install.py.
+
+# --- Resumen diario (qué se hizo en el día) --------------------------------
+# Se manda al final del día por una tarea programada propia (ConcursoRadarResumen),
+# que corre `main.py --resumen` SIN consultar Apify (costo cero). Reporta cuántos
+# posts nuevos se revisaron y cuántas alertas se enviaron.
+resumen:
+  activo: true
+  hora: "21:00"             # informativo. El horario real lo fija install.py (HORA_RESUMEN).
 
 # --- Base de datos y logs --------------------------------------------------
 base_datos:

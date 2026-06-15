@@ -169,8 +169,11 @@ def ejecutar_ciclo(
         )
         log.warning("Límite diario alcanzado tras este ciclo.")
 
-    # Persistir el timestamp de inicio de esta corrida para el próximo ciclo.
+    # Persistir el timestamp de inicio de esta corrida para el próximo ciclo y
+    # acumular la actividad del día (insumo del resumen diario y del tope de
+    # corridas). Solo se llega aquí en una corrida con búsqueda exitosa.
     db.guardar_estado("ultima_corrida_utc", nueva_corrida_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z"))
+    db.registrar_corrida(resumen["posts"], resumen["nuevos"], resumen["alertas"])
     return resumen
 
 
@@ -181,6 +184,55 @@ def heartbeat_diario(notificador: NotificadorTelegram, tracker: ControlPresupues
         f"✅ Concurso Radar sigue activo. Gasto de hoy: ${gasto:.2f} USD."
     )
     log.info("Heartbeat diario enviado.")
+
+
+def formatear_resumen(datos: dict, gasto_usd: float) -> str:
+    """
+    Arma el texto del resumen diario para Telegram (HTML). `datos` viene de
+    `BaseDatos.resumen_dia`. Si el día no tuvo corridas (PC apagado/suspendido a
+    las horas programadas), lo dice de forma explícita en vez de mostrar ceros secos.
+    """
+    fecha = datos.get("fecha", "")
+    corridas = datos.get("corridas", 0)
+    if corridas == 0:
+        return (
+            f"📊 <b>Resumen del día</b> — {fecha}\n\n"
+            "No hubo corridas hoy (el PC estuvo apagado o suspendido a las horas "
+            "programadas). No se revisaron posts."
+        )
+    return (
+        f"📊 <b>Resumen del día</b> — {fecha}\n\n"
+        f"🔁 Corridas: {corridas}\n"
+        f"👀 Posts nuevos revisados: {datos.get('nuevos', 0)}\n"
+        f"🏆 Alertas enviadas: {datos.get('alertas', 0)}\n"
+        f"💰 Gasto Apify hoy: ${gasto_usd:.2f} USD"
+    )
+
+
+def enviar_resumen_diario() -> dict:
+    """
+    Lee el registro de actividad del día y manda el resumen por Telegram.
+    NO consulta Apify (costo cero): es el punto de entrada de la tarea programada
+    de fin de día (`main.py --resumen`, registrada por install.py como
+    `ConcursoRadarResumen`). Devuelve el dict del resumen para pruebas.
+
+    Si `resumen.activo` está en false en la config, no manda nada (interruptor de
+    apagado, igual que el heartbeat).
+    """
+    config = cargar_config()
+    configurar_logging(config.get("logs", {}).get("ruta", "logs/system.log"))
+
+    if not config.get("resumen", {}).get("activo", True):
+        log.info("Resumen diario desactivado en config; no se envía.")
+        return {}
+
+    log.info("Concurso Radar: preparando el resumen diario.")
+    db, _buscador, notificador, tracker = _construir_componentes(config)
+    datos = db.resumen_dia()
+    gasto = tracker.gasto_hoy("apify")
+    notificador.enviar_heartbeat(formatear_resumen(datos, gasto))
+    log.info("Resumen diario enviado: %s, gasto $%.4f USD.", datos, gasto)
+    return datos
 
 
 def _construir_componentes(
@@ -200,26 +252,41 @@ def _construir_componentes(
     return db, buscador, notificador, tracker
 
 
-def _corrida_demasiado_reciente(config: dict, db: BaseDatos) -> bool:
+def _motivo_para_omitir(config: dict, db: BaseDatos) -> str | None:
     """
-    Devuelve True si la última corrida EXITOSA fue hace menos de
-    `busqueda.min_horas_entre_corridas`.
+    Decide si esta corrida debe omitirse y por qué. Devuelve el estado a reportar
+    (`omitido_cupo_diario` u `omitido_reciente`) o None si la corrida debe correr.
 
-    Es el candado anti-costo del disparador por inicio de sesión: ese disparador
-    es una red de seguridad (cubre cuando se perdió una corrida programada porque
-    el PC estaba apagado), pero no debe gastar de más si una corrida reciente ya
-    cubrió la ventana. Como `ultima_corrida_utc` solo se actualiza al terminar un
-    ciclo con búsqueda exitosa, una corrida fallida o pausada por presupuesto no
-    cuenta (y por tanto no bloquea el reintento).
+    Son dos candados anti-costo que, juntos, garantizan ~2 corridas/día bien
+    espaciadas pase lo que pase con el patrón de encendido del PC:
+
+    - `max_corridas_por_dia` (tope DURO): nunca se pagan más de N búsquedas en el
+      día. Cuenta solo las corridas EXITOSAS (tabla actividad_diaria), así que una
+      corrida fallida o pausada por presupuesto no consume cupo.
+    - `min_horas_entre_corridas` (SEPARACIÓN): evita dos corridas pegadas, p. ej. la
+      del disparador por inicio de sesión seguida de un slot fijo. Si un slot cae
+      dentro de esta ventana se omite; el slot de tarde extra (ver install.py:HORAS)
+      lo repone una vez pasada la separación, de modo que no se pierde la 2.ª corrida
+      del día (el problema que tenía el candado anterior, que solo descartaba).
+
+    Se evalúa el tope ANTES que la separación: una vez completado el cupo del día,
+    no importa cuánto haya pasado, no se corre más.
     """
-    min_horas = config["busqueda"].get("min_horas_entre_corridas", 0)
-    if not min_horas:
-        return False
-    ultima = db.leer_estado("ultima_corrida_utc")
-    if not ultima:
-        return False
-    transcurrido = datetime.now(timezone.utc) - datetime.fromisoformat(ultima)
-    return transcurrido < timedelta(hours=float(min_horas))
+    bq = config["busqueda"]
+
+    max_dia = int(bq.get("max_corridas_por_dia", 0) or 0)
+    if max_dia and db.contar_corridas_hoy() >= max_dia:
+        return "omitido_cupo_diario"
+
+    min_horas = float(bq.get("min_horas_entre_corridas", 0) or 0)
+    if min_horas:
+        ultima = db.leer_estado("ultima_corrida_utc")
+        if ultima:
+            transcurrido = datetime.now(timezone.utc) - datetime.fromisoformat(ultima)
+            if transcurrido < timedelta(hours=min_horas):
+                return "omitido_reciente"
+
+    return None
 
 
 def _heartbeat_si_toca(
@@ -261,11 +328,19 @@ def correr_una_vez() -> dict:
     mantener_despierto()
     try:
         db, buscador, notificador, tracker = _construir_componentes(config)
-        if _corrida_demasiado_reciente(config, db):
-            resumen = {"posts": 0, "nuevos": 0, "alertas": 0, "estado": "omitido_reciente"}
+        motivo = _motivo_para_omitir(config, db)
+        if motivo == "omitido_cupo_diario":
+            resumen = {"posts": 0, "nuevos": 0, "alertas": 0, "estado": motivo}
+            log.info(
+                "Se omite esta corrida: ya se completaron las %s corridas del día "
+                "(tope anti-costo 'max_corridas_por_dia').",
+                config["busqueda"].get("max_corridas_por_dia", 0),
+            )
+        elif motivo == "omitido_reciente":
+            resumen = {"posts": 0, "nuevos": 0, "alertas": 0, "estado": motivo}
             log.info(
                 "Se omite esta corrida: hubo una exitosa hace menos de %s h "
-                "(candado anti-costo del disparador por inicio de sesión).",
+                "(separación mínima 'min_horas_entre_corridas'). Un slot posterior la repone.",
                 config["busqueda"].get("min_horas_entre_corridas", 0),
             )
         else:

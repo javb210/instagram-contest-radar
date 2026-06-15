@@ -39,9 +39,18 @@ from pathlib import Path
 
 # --- Constantes del proyecto -----------------------------------------------
 NOMBRE_TAREA = "ConcursoRadar"
-# Horas (24h, hora local del PC) en que corre el sistema. 2 corridas/día = palanca
-# de costo. Elegidas dentro de la ventana en que el PC del cliente suele estar prendido.
-HORAS = ["11:00", "18:00"]
+# Horas (24h, hora local del PC) que DISPARAN una búsqueda. NO son 3 corridas: el
+# tope 'max_corridas_por_dia' (settings.yaml) limita a 2 búsquedas pagadas/día. Las
+# 11:00 y 18:00 son el camino normal; las 20:00 son un SLOT DE TARDE EXTRA que repone
+# la 2.ª corrida cuando el PC arrancó en la tarde y la de las 18:00 cayó dentro de la
+# separación mínima (min_horas_entre_corridas). En un día normal, las 20:00 se omiten
+# por cupo lleno. Ver el candado _motivo_para_omitir en scheduler.py.
+HORAS = ["11:00", "18:00", "20:00"]
+
+# Tarea aparte que manda el resumen del día (main.py --resumen). Sin costo Apify.
+NOMBRE_TAREA_RESUMEN = "ConcursoRadarResumen"
+HORA_RESUMEN = "21:00"
+
 RAIZ = Path(__file__).resolve().parent
 MAIN_PY = RAIZ / "main.py"
 START_BAT = RAIZ / "start_radar.bat"
@@ -192,43 +201,39 @@ def _triggers_xml(horas: list[str]) -> str:
     return "\n".join(bloques)
 
 
-def construir_xml() -> str:
+def _construir_xml(
+    nombre: str,
+    descripcion: str,
+    triggers: str,
+    argumentos: str,
+    wake_to_run: bool,
+) -> str:
     """
-    Construye el XML de la tarea. Incluye:
-      - CalendarTrigger por cada hora de HORAS: dispara a horas fijas, todos los días.
-      - LogonTrigger: respaldo al iniciar sesión (cubre PC apagado a la hora). El
-        candado `min_horas_entre_corridas` (scheduler.py) evita gasto extra.
-      - WakeToRun: despierta el PC suspendido para correr a la hora (requiere wake
-        timers habilitados, lo hace `habilitar_wake_timers`).
-      - StartWhenAvailable: recuperación adicional si el PC estaba no disponible.
-      - RunLevel HighestAvailable: privilegios altos disponibles.
-      - WorkingDirectory: la raíz del proyecto (rutas relativas funcionan).
-      - RestartOnFailure: hasta 2 reintentos, uno por minuto, si main.py falla.
-      - ExecutionTimeLimit PT1H: corta una corrida colgada tras 1 hora (ya no es
-        un proceso de larga vida; cada corrida dura segundos).
+    Construye el XML de una tarea del Programador. Parametrizado para servir a las
+    dos tareas del sistema (búsqueda y resumen), que comparten casi todo:
+      - `triggers`: bloque XML de disparadores ya armado (ver `_triggers_xml` y abajo).
+      - `argumentos`: argumentos del Exec ya escapados (ej. `"...main.py"` o con --resumen).
+      - `wake_to_run`: despierta el PC suspendido para correr a la hora. La búsqueda
+        sí (true, requiere wake timers, los habilita `habilitar_wake_timers`); el
+        resumen no (false): si el PC está dormido a esa hora no vale despertarlo solo
+        para mandar un mensaje, se enviará al volver gracias a StartWhenAvailable.
+
+    El resto es común: StartWhenAvailable (recupera si el PC estaba no disponible),
+    RunLevel HighestAvailable, WorkingDirectory en la raíz (rutas relativas), reintentos
+    y ExecutionTimeLimit PT1H (corta una corrida colgada; cada corrida dura segundos).
     """
     usuario = _escapar_xml(usuario_actual())
     comando = _escapar_xml(str(pythonw_exe()))
-    argumentos = _escapar_xml(f'"{MAIN_PY}"')
     directorio = _escapar_xml(str(RAIZ))
-
-    # Disparadores por hora + un LogonTrigger de respaldo (red de seguridad para
-    # cuando el PC estaba apagado a la hora). El gasto extra lo evita el candado
-    # `min_horas_entre_corridas` en scheduler.py.
-    triggers = _triggers_xml(HORAS) + "\n" + (
-        "    <LogonTrigger>\n"
-        "      <Enabled>true</Enabled>\n"
-        f"      <UserId>{usuario}</UserId>\n"
-        "    </LogonTrigger>"
-    )
+    wake = "true" if wake_to_run else "false"
 
     plantilla = textwrap.dedent(
         """\
         <?xml version="1.0" encoding="UTF-16"?>
         <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
           <RegistrationInfo>
-            <Description>Concurso Radar: monitorea Instagram y avisa por Telegram.</Description>
-            <URI>\\{NOMBRE_TAREA}</URI>
+            <Description>{descripcion}</Description>
+            <URI>\\{nombre}</URI>
           </RegistrationInfo>
           <Triggers>
         {triggers}
@@ -255,7 +260,7 @@ def construir_xml() -> str:
             <Enabled>true</Enabled>
             <Hidden>false</Hidden>
             <RunOnlyIfIdle>false</RunOnlyIfIdle>
-            <WakeToRun>true</WakeToRun>
+            <WakeToRun>{wake}</WakeToRun>
             <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
             <Priority>7</Priority>
             <RestartOnFailure>
@@ -274,17 +279,84 @@ def construir_xml() -> str:
         """
     )
     return plantilla.format(
-        NOMBRE_TAREA=NOMBRE_TAREA,
+        nombre=nombre,
+        descripcion=descripcion,
         triggers=triggers,
         usuario=usuario,
         comando=comando,
         argumentos=argumentos,
         directorio=directorio,
+        wake=wake,
     )
 
 
+def construir_xml_busqueda() -> str:
+    """
+    XML de la tarea de BÚSQUEDA (`ConcursoRadar`): corridas a horas fijas (HORAS) +
+    un LogonTrigger de respaldo (cubre PC apagado a la hora). El gasto extra de tener
+    varios disparos lo acotan el tope `max_corridas_por_dia` y la separación
+    `min_horas_entre_corridas` (scheduler.py). WakeToRun para despertar a la hora.
+    """
+    usuario = _escapar_xml(usuario_actual())
+    triggers = _triggers_xml(HORAS) + "\n" + (
+        "    <LogonTrigger>\n"
+        "      <Enabled>true</Enabled>\n"
+        f"      <UserId>{usuario}</UserId>\n"
+        "    </LogonTrigger>"
+    )
+    return _construir_xml(
+        nombre=NOMBRE_TAREA,
+        descripcion="Concurso Radar: monitorea Instagram y avisa por Telegram.",
+        triggers=triggers,
+        argumentos=_escapar_xml(f'"{MAIN_PY}"'),
+        wake_to_run=True,
+    )
+
+
+def construir_xml_resumen() -> str:
+    """
+    XML de la tarea de RESUMEN (`ConcursoRadarResumen`): un único CalendarTrigger a
+    HORA_RESUMEN que corre `main.py --resumen` (sin Apify, costo cero). Sin LogonTrigger
+    (no es crítica) y sin WakeToRun (no se despierta el PC solo para un mensaje).
+    """
+    return _construir_xml(
+        nombre=NOMBRE_TAREA_RESUMEN,
+        descripcion="Concurso Radar: resumen diario por Telegram (sin costo Apify).",
+        triggers=_triggers_xml([HORA_RESUMEN]),
+        argumentos=_escapar_xml(f'"{MAIN_PY}" --resumen'),
+        wake_to_run=False,
+    )
+
+
+def _registrar_tarea(nombre: str, xml: str) -> bool:
+    """
+    Registra (o sobreescribe) una tarea en el Programador a partir de su XML.
+    Escribe el XML en UTF-16 (lo que espera schtasks), corre `schtasks /Create /F`
+    y limpia el temporal. Devuelve True si se registró bien.
+    """
+    # El Programador de Tareas espera el XML en UTF-16; write_text con 'utf-16'
+    # añade el BOM correcto.
+    XML_TEMP.write_text(xml, encoding="utf-16")
+    comando = [
+        "schtasks", "/Create", "/TN", nombre, "/XML", str(XML_TEMP),
+        "/F",  # sobrescribe si ya existe -> idempotente
+    ]
+    resultado = subprocess.run(comando, capture_output=True, text=True, check=False)
+    XML_TEMP.unlink(missing_ok=True)  # limpiar pase lo que pase
+
+    if resultado.returncode != 0:
+        print(f"[X] No se pudo registrar la tarea '{nombre}'.")
+        if resultado.stdout.strip():
+            print(resultado.stdout.strip())
+        if resultado.stderr.strip():
+            print(resultado.stderr.strip())
+        return False
+    print(f"[OK] Tarea '{nombre}' registrada correctamente.")
+    return True
+
+
 def instalar() -> None:
-    """Verifica requisitos, genera el .bat y registra la tarea de arranque automático."""
+    """Verifica requisitos, genera el .bat y registra las dos tareas programadas."""
     print("== Instalando Concurso Radar ==\n")
     if not verificar_requisitos():
         print("\n[X] Faltan requisitos. Corrige lo anterior y vuelve a intentar.")
@@ -293,31 +365,12 @@ def instalar() -> None:
     crear_bat()
     habilitar_wake_timers()
 
-    # El Programador de Tareas espera el XML en UTF-16; lo escribimos con esa
-    # codificación (write_text con 'utf-16' añade el BOM correcto).
-    XML_TEMP.write_text(construir_xml(), encoding="utf-16")
+    ok_busqueda = _registrar_tarea(NOMBRE_TAREA, construir_xml_busqueda())
+    ok_resumen = _registrar_tarea(NOMBRE_TAREA_RESUMEN, construir_xml_resumen())
 
-    comando = [
-        "schtasks",
-        "/Create",
-        "/TN",
-        NOMBRE_TAREA,
-        "/XML",
-        str(XML_TEMP),
-        "/F",  # sobrescribe si ya existe -> idempotente
-    ]
-    resultado = subprocess.run(comando, capture_output=True, text=True, check=False)
-
-    # Limpiamos el XML temporal pase lo que pase.
-    XML_TEMP.unlink(missing_ok=True)
-
-    if resultado.returncode != 0:
-        print("\n[X] No se pudo registrar la tarea.")
-        if resultado.stdout.strip():
-            print(resultado.stdout.strip())
-        if resultado.stderr.strip():
-            print(resultado.stderr.strip())
+    if not (ok_busqueda and ok_resumen):
         print(
+            "\n[X] No se pudieron registrar todas las tareas."
             "\nCausa más común: faltan permisos. Abre PowerShell o CMD como "
             "Administrador (clic derecho → 'Ejecutar como administrador') y vuelve "
             "a correr: python install.py"
@@ -325,28 +378,33 @@ def instalar() -> None:
         sys.exit(1)
 
     horas_txt = " y ".join(HORAS)
-    print(f"\n[OK] Tarea '{NOMBRE_TAREA}' registrada correctamente.")
     print(
         textwrap.dedent(
             f"""\
 
             Qué pasa ahora:
-              - El sistema corre solo a las {horas_txt} (hora local), todos los días.
-              - Si el PC está suspendido a esa hora, se DESPIERTA solo para correr
+              - El sistema BUSCA a las {horas_txt} (hora local), todos los días. Son
+                disparos posibles, no 3 corridas: un tope de 2 búsquedas/día y una
+                separación mínima de 5h dejan ~2 corridas reales bien espaciadas.
+                Las 20:00 son un slot de respaldo: reponen la 2.ª corrida los días en
+                que el PC arrancó en la tarde y la de las 18:00 quedó muy pegada.
+              - Si el PC está suspendido a esa hora, se DESPIERTA solo para buscar
                 (WakeToRun) y vuelve a dormir. Funciona enchufado o en batería.
               - Si el PC estaba APAGADO a la hora, la corrida se ejecuta apenas lo
                 prendas e inicies sesión (disparador de respaldo por inicio de sesión).
-                Ese respaldo no gasta de más: se omite si ya hubo una corrida reciente
-                (candado 'min_horas_entre_corridas' en settings.yaml).
+              - Al final del día (≈{HORA_RESUMEN}) manda por Telegram un RESUMEN del día
+                (posts revisados y alertas enviadas). Esa tarea NO consulta Apify (gratis)
+                y NO despierta el PC: si está dormido, el resumen llega al volver a usarlo.
               - Cada corrida revisa las cuentas y termina; corre sin ventana (pythonw.exe).
               - Si una corrida falla, Windows la reintenta hasta 2 veces (1 min entre cada una).
 
             Para verificar:
-              1. Abre el 'Programador de tareas' de Windows y busca '{NOMBRE_TAREA}'.
-              2. Selecciónala y pulsa 'Ejecutar' para probarla sin esperar la hora;
+              1. Abre el 'Programador de tareas' de Windows y busca '{NOMBRE_TAREA}' y
+                 '{NOMBRE_TAREA_RESUMEN}'.
+              2. Selecciónalas y pulsa 'Ejecutar' para probarlas sin esperar la hora;
                  luego revisa logs/system.log y espera el mensaje en Telegram.
 
-            Para quitarla:
+            Para quitarlas:
               python install.py --desinstalar
             """
         )
@@ -354,20 +412,26 @@ def instalar() -> None:
 
 
 def desinstalar() -> None:
-    """Elimina la tarea del Programador de Tareas y borra el .bat generado."""
-    print(f"== Desinstalando '{NOMBRE_TAREA}' ==\n")
-    comando = ["schtasks", "/Delete", "/TN", NOMBRE_TAREA, "/F"]
-    resultado = subprocess.run(comando, capture_output=True, text=True, check=False)
-
-    if resultado.returncode != 0:
-        print("[X] No se pudo eliminar la tarea (quizás no estaba registrada).")
-        if resultado.stderr.strip():
-            print(resultado.stderr.strip())
-        sys.exit(1)
+    """Elimina ambas tareas del Programador de Tareas y borra el .bat generado."""
+    print("== Desinstalando Concurso Radar ==\n")
+    hubo_error = False
+    for nombre in (NOMBRE_TAREA, NOMBRE_TAREA_RESUMEN):
+        comando = ["schtasks", "/Delete", "/TN", nombre, "/F"]
+        resultado = subprocess.run(comando, capture_output=True, text=True, check=False)
+        if resultado.returncode == 0:
+            print(f"[OK] Tarea '{nombre}' eliminada.")
+        else:
+            # No es fatal: la tarea pudo no existir (ej. instalación previa sin resumen).
+            print(f"[!] No se pudo eliminar '{nombre}' (quizás no estaba registrada).")
+            if resultado.stderr.strip():
+                print("    " + resultado.stderr.strip())
+            hubo_error = True
 
     START_BAT.unlink(missing_ok=True)
-    print(f"[OK] Tarea '{NOMBRE_TAREA}' eliminada.")
     print("  Nota: el proceso ya en ejecución sigue vivo hasta el próximo reinicio.")
+    if hubo_error:
+        # Salida 0 igual: que falte una tarea por borrar no debe verse como falla dura.
+        print("  (Alguna tarea no estaba registrada; nada más que hacer.)")
 
 
 def main() -> None:

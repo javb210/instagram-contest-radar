@@ -90,6 +90,17 @@ class BaseDatos:
                     clave TEXT PRIMARY KEY,
                     valor TEXT
                 );
+
+                -- Actividad por día: un renglón por fecha local. Alimenta dos cosas:
+                --   * el resumen diario que se manda al final del día (posts/alertas);
+                --   * el tope de corridas/día del candado anti-costo (campo `corridas`).
+                CREATE TABLE IF NOT EXISTS actividad_diaria (
+                    fecha    DATE PRIMARY KEY,
+                    corridas INTEGER DEFAULT 0,
+                    posts    INTEGER DEFAULT 0,
+                    nuevos   INTEGER DEFAULT 0,
+                    alertas  INTEGER DEFAULT 0
+                );
                 """
             )
 
@@ -199,6 +210,71 @@ class BaseDatos:
             return float(fila["total"])
 
     # ------------------------------------------------------------------ #
+    # Actividad diaria (tabla actividad_diaria)
+    # ------------------------------------------------------------------ #
+
+    def registrar_corrida(
+        self,
+        posts: int,
+        nuevos: int,
+        alertas: int,
+        fecha: date | None = None,
+    ) -> None:
+        """
+        Suma una corrida al acumulado del día y le agrega sus conteos.
+        Se llama una vez por ciclo EXITOSO (no por corrida fallida ni pausada),
+        de modo que `corridas` cuenta solo las búsquedas que de verdad se hicieron.
+        Usa la fecha local (date.today), igual que el gasto, para alinear con el
+        día del cliente.
+        """
+        dia = (fecha or date.today()).isoformat()
+        with self._conexion() as conexion:
+            conexion.execute(
+                """
+                INSERT INTO actividad_diaria (fecha, corridas, posts, nuevos, alertas)
+                VALUES (?, 1, ?, ?, ?)
+                ON CONFLICT(fecha) DO UPDATE SET
+                    corridas = corridas + 1,
+                    posts    = posts + excluded.posts,
+                    nuevos   = nuevos + excluded.nuevos,
+                    alertas  = alertas + excluded.alertas
+                """,
+                (dia, posts, nuevos, alertas),
+            )
+
+    def contar_corridas_hoy(self, fecha: date | None = None) -> int:
+        """Devuelve cuántas corridas exitosas se llevan en el día (0 si ninguna)."""
+        dia = (fecha or date.today()).isoformat()
+        with self._conexion() as conexion:
+            fila = conexion.execute(
+                "SELECT corridas FROM actividad_diaria WHERE fecha = ?", (dia,)
+            ).fetchone()
+            return int(fila["corridas"]) if fila else 0
+
+    def resumen_dia(self, fecha: date | None = None) -> dict:
+        """
+        Devuelve el acumulado del día como dict
+        {fecha, corridas, posts, nuevos, alertas}. Si no hubo actividad, todo en 0.
+        Insumo del resumen diario por Telegram.
+        """
+        dia = (fecha or date.today()).isoformat()
+        with self._conexion() as conexion:
+            fila = conexion.execute(
+                "SELECT corridas, posts, nuevos, alertas "
+                "FROM actividad_diaria WHERE fecha = ?",
+                (dia,),
+            ).fetchone()
+        if fila is None:
+            return {"fecha": dia, "corridas": 0, "posts": 0, "nuevos": 0, "alertas": 0}
+        return {
+            "fecha": dia,
+            "corridas": int(fila["corridas"]),
+            "posts": int(fila["posts"]),
+            "nuevos": int(fila["nuevos"]),
+            "alertas": int(fila["alertas"]),
+        }
+
+    # ------------------------------------------------------------------ #
     # Estado del sistema (tabla estado)
     # ------------------------------------------------------------------ #
 
@@ -257,6 +333,12 @@ if __name__ == "__main__":
     db.guardar_estado("ultima_corrida_utc", "2026-06-11T13:00:00.000Z")  # UPSERT
     print("Estado actualizado       ->", db.leer_estado("ultima_corrida_utc"))
     print("Estado inexistente       ->", db.leer_estado("no_existe"))    # None
+
+    print("Corridas hoy (inicio)    ->", db.contar_corridas_hoy())       # 0
+    db.registrar_corrida(posts=44, nuevos=3, alertas=1)
+    db.registrar_corrida(posts=40, nuevos=2, alertas=0)
+    print("Corridas hoy (tras 2)    ->", db.contar_corridas_hoy())       # 2
+    print("Resumen del día          ->", db.resumen_dia())  # posts 84, nuevos 5, alertas 1
 
     os.remove(ruta_temporal)
     print("Prueba completada. Base temporal eliminada.")
