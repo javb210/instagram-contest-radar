@@ -26,6 +26,7 @@ from pathlib import Path
 import yaml
 
 from budget.tracker import ControlPresupuesto
+from classifier.ai_filter import ClasificadorIA
 from filters.keywords import es_candidato
 from notifier.telegram import NotificadorTelegram
 from power import liberar, mantener_despierto
@@ -68,20 +69,26 @@ def ejecutar_ciclo(
     buscador: BuscadorInstagram,
     notificador: NotificadorTelegram,
     tracker: ControlPresupuesto,
+    clasificador: ClasificadorIA | None = None,
 ) -> dict:
     """
     Ejecuta un ciclo completo. Devuelve un resumen con conteos y estado.
 
     Flujo por cada post traído:
       - si ya fue visto -> se ignora (deduplicación)
-      - si es candidato (keywords) -> se envía alerta; si el envío tuvo éxito,
-        se guarda en el historial y se marca como visto
+      - si es candidato (keywords):
+          * Fase 2 (clasificador presente): la IA decide si es relevante.
+            Si NO lo es -> se marca visto y no se avisa. Si SÍ -> se avisa con el
+            resumen estructurado. Si la IA falla -> se avisa igual con la alerta
+            cruda (fail-open: nunca se pierde un concurso por un error de la IA).
+          * Fase 1 (sin clasificador): se avisa con la alerta cruda directamente.
+        Si el envío tuvo éxito, se guarda en el historial y se marca como visto.
       - si NO es candidato -> se marca como visto (no se reprocesa)
     Si un candidato no se pudo avisar (Telegram caído), NO se marca como visto,
     para reintentarlo en el próximo ciclo.
     """
     servicio = "apify"
-    resumen = {"posts": 0, "nuevos": 0, "alertas": 0, "estado": "ok"}
+    resumen = {"posts": 0, "nuevos": 0, "alertas": 0, "descartados_ia": 0, "estado": "ok"}
 
     # Si ya se alcanzó el techo de gasto del día, no gastar más.
     if tracker.supera_limite(servicio):
@@ -140,7 +147,27 @@ def ejecutar_ciclo(
         resumen["nuevos"] += 1
 
         if es_candidato(post["caption"], incluir, excluir):
-            if notificador.enviar_alerta(post):
+            # Fase 2: la IA confirma relevancia y produce el resumen. Si no hay
+            # clasificador (sin api_key), se mantiene el comportamiento Fase 1.
+            resumen_ia = None
+            if clasificador is not None:
+                try:
+                    analisis = clasificador.analizar(post["caption"])
+                    if not analisis["relevante"]:
+                        db.marcar_visto(post["url"], "instagram")
+                        resumen["descartados_ia"] += 1
+                        log.info(
+                            "IA descartó @%s %s (no relevante).", post["cuenta"], post["url"]
+                        )
+                        continue
+                    resumen_ia = analisis
+                except Exception as error:  # fail-open: avisar igual sin resumen
+                    log.warning(
+                        "La IA falló en %s; se envía la alerta cruda (fail-open). %s",
+                        post["url"], error,
+                    )
+
+            if notificador.enviar_alerta(post, resumen_ia):
                 db.guardar_concurso(
                     post["cuenta"], post["caption"], post["url"],
                     plataforma="instagram", fecha_post=post["fecha"],
@@ -157,8 +184,10 @@ def ejecutar_ciclo(
             db.marcar_visto(post["url"], "instagram")
 
     log.info(
-        "Ciclo terminado: %d posts, %d nuevos, %d alertas. Gasto hoy: $%.4f USD.",
-        resumen["posts"], resumen["nuevos"], resumen["alertas"], tracker.gasto_hoy(servicio),
+        "Ciclo terminado: %d posts, %d nuevos, %d alertas, %d descartados por IA. "
+        "Gasto hoy: $%.4f USD.",
+        resumen["posts"], resumen["nuevos"], resumen["alertas"],
+        resumen["descartados_ia"], tracker.gasto_hoy(servicio),
     )
 
     # 4. Si este ciclo nos pasó del techo, avisar una vez.
@@ -250,6 +279,23 @@ def _construir_componentes(
         config["presupuesto"]["costo_por_mil_resultados_usd"],
     )
     return db, buscador, notificador, tracker
+
+
+def construir_clasificador(config: dict) -> ClasificadorIA | None:
+    """
+    Construye el clasificador de IA (Fase 2) SOLO si hay `anthropic.api_key` en la
+    config. Sin key devuelve None y el sistema corre tal cual la Fase 1 (solo
+    keywords). Así el cliente activa la IA con solo pegar su key, sin tocar código.
+    """
+    cfg = config.get("anthropic", {}) or {}
+    api_key = cfg.get("api_key", "")
+    if not api_key:
+        return None
+    return ClasificadorIA(
+        api_key,
+        modelo=cfg.get("modelo"),
+        criterio_relevancia=cfg.get("criterio_relevancia"),
+    )
 
 
 def _motivo_para_omitir(config: dict, db: BaseDatos) -> str | None:
@@ -344,7 +390,10 @@ def correr_una_vez() -> dict:
                 config["busqueda"].get("min_horas_entre_corridas", 0),
             )
         else:
-            resumen = ejecutar_ciclo(config, db, buscador, notificador, tracker)
+            clasificador = construir_clasificador(config)
+            if clasificador is not None:
+                log.info("Fase 2 activa: clasificación con IA habilitada (modelo %s).", clasificador.modelo)
+            resumen = ejecutar_ciclo(config, db, buscador, notificador, tracker, clasificador)
             _heartbeat_si_toca(config, db, notificador, tracker)
     finally:
         liberar()

@@ -5,8 +5,9 @@ Búsqueda de publicaciones en Instagram mediante un actor de Apify.
 FASE 1 — núcleo del sistema.
 
 Actor en uso: apify/instagram-post-scraper.
-PPR puro: cobra $2.70/1000 posts devueltos. Cuenta sin posts nuevos = $0,
-lo que elimina el costo por perfil consultado del actor oficial general.
+Tarifa real medida: $1.70/1000 eventos ($0.0017/evento). El actor cobra por
+PERFIL CONSULTADO, no por post devuelto — una cuenta sin novedad igual genera
+un evento facturado (stub vacío). La palanca de costo es la frecuencia de ciclos.
 
 Este módulo aísla todo el contacto con Apify y normaliza cada post al formato
 uniforme del sistema: {cuenta, caption, url, fecha, imagen_url}.

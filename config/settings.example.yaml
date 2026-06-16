@@ -18,9 +18,18 @@ telegram:
   bot_token: ""          # Token del bot creado con @BotFather
   chat_id: ""            # chat_id destino (el tuyo para pruebas; el del cliente en producción)
 
-# Reservado para la Fase 2 (clasificación con IA). Dejar vacío por ahora.
+# --- Fase 2: clasificación con IA (cuenta de Anthropic, aparte de Apify) --------
+# La IA se ACTIVA sola en cuanto api_key tenga valor. Vacía = el sistema corre solo
+# con keywords (Fase 1), sin tocar código. Esta cuenta es SEPARADA de Apify y no
+# cuenta contra el tope de $5/mes.
 anthropic:
-  api_key: ""
+  api_key: ""                          # pega aquí la key de la cuenta de Anthropic del cliente
+  modelo: "claude-haiku-4-5-20251001"  # Claude Haiku: barato y suficiente para este volumen
+  criterio_relevancia: >               # qué cuenta como "relevante" (se afina con el cliente)
+    Es relevante un concurso o sorteo real donde el usuario debe participar, comprar
+    o interactuar para ganar un premio concreto. NO es relevante: publicidad sin
+    mecánica de participación, ofertas o descuentos, empleos, webinars o cursos, ni
+    dinámicas de muy bajo valor.
 
 # --- Cuentas de Instagram a monitorear -------------------------------------
 # Esta lista cambia con el tiempo: agregar o quitar cuentas aquí.
@@ -82,9 +91,9 @@ busqueda:
 
 # --- Control de presupuesto ------------------------------------------------
 presupuesto:
-  limite_diario_usd: 0.30           # techo de gasto/día; si se supera, pausa y avisa
-  costo_por_mil_resultados_usd: 2.70  # tarifa del actor EN USO. Oficial apify/instagram-scraper ≈ 2.70;
-                                      # actores económicos (apidojo/sones) ≈ 0.30–0.50. Ajustar al actor elegido.
+  limite_diario_usd: 0.25           # techo de gasto/día; si se supera, pausa y avisa
+  costo_por_mil_resultados_usd: 1.70  # tarifa REAL medida de apify/instagram-post-scraper ($0.0017/evento).
+                                      # Con 39 cuentas × 2 ciclos/día el costo estimado es ~$0.13/día.
 
 # --- Heartbeat (mensaje de "sigo activo") ----------------------------------
 heartbeat:

@@ -8,6 +8,10 @@ storage/*.db
 # --- Logs ------------------------------------------------------------------
 logs/*.log
 
+# --- Gold set etiquetado (Fase 2): captions del cliente, no se publica ------
+etiquetas.csv
+*.gold.csv
+
 # --- Artefactos generados por install.py -----------------------------------
 start_radar.bat
 _tarea_concurso_radar.xml

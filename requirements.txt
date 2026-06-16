@@ -12,11 +12,10 @@ requests>=2.31              # envío de alertas y heartbeat a la API de Telegram
 APScheduler>=3.10           # ciclos automáticos de búsqueda
 tzdata>=2024.1              # base de zonas horarias (necesaria para APScheduler en Windows)
 
+anthropic>=0.40            # Fase 2: cliente de la API de Anthropic (Claude Haiku)
+
 # Fase de comandos interactivos (/pausar, /buscar), más adelante:
 # python-telegram-bot>=21.0   # solo se necesita para RECIBIR comandos de Telegram
-
-# Fase 2 (clasificación y resumen con IA), se agrega más adelante:
-# anthropic>=0.40           # cliente de la API de Anthropic (Claude Haiku)
 
 # Nota: tras instalar, conviene fijar las versiones exactas con:
 #   pip freeze > requirements.txt
