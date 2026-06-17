@@ -89,21 +89,34 @@ def formatear_alerta(post: dict, resumen: dict | None = None) -> str:
 
 
 class NotificadorTelegram:
-    """Encapsula el envío de mensajes a Telegram mediante el bot."""
+    """Encapsula el envío de mensajes a Telegram mediante el bot.
 
-    def __init__(self, bot_token: str, chat_id: str) -> None:
-        if not bot_token or not chat_id:
-            raise ValueError("Se requieren 'bot_token' y 'chat_id' de Telegram.")
+    Soporta uno o varios destinatarios: `chat_id` puede ser un único id (str/int)
+    o una lista de ids. Cada mensaje se envía a TODOS los destinatarios. La
+    entrega se considera exitosa solo si TODOS la aceptan; si alguno falla,
+    `_enviar_texto` devuelve False para que el orquestador no marque el post como
+    visto y reintente en el siguiente ciclo (a costa de un posible duplicado en
+    los chats que sí recibieron, aceptable para este volumen bajo de alertas).
+    """
+
+    def __init__(self, bot_token: str, chat_id: str | int | list) -> None:
+        if isinstance(chat_id, (str, int)):
+            chat_ids = [chat_id]
+        else:
+            chat_ids = list(chat_id)
+        limpios = [str(c).strip() for c in chat_ids if str(c).strip()]
+        self.chat_ids = list(dict.fromkeys(limpios))  # sin duplicados, conserva el orden
+        if not bot_token or not self.chat_ids:
+            raise ValueError("Se requieren 'bot_token' y al menos un 'chat_id' de Telegram.")
         self.bot_token = bot_token
-        self.chat_id = str(chat_id)
 
     def _url(self, metodo: str) -> str:
         return f"{API_BASE}/bot{self.bot_token}/{metodo}"
 
-    def _enviar_texto(self, texto: str) -> bool:
-        """Envía un mensaje. Devuelve True si Telegram lo aceptó, False si falló."""
+    def _enviar_a_uno(self, chat_id: str, texto: str) -> bool:
+        """Envía un mensaje a un solo chat. True si Telegram lo aceptó."""
         payload = {
-            "chat_id": self.chat_id,
+            "chat_id": chat_id,
             "text": texto,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,  # mensajes limpios; el link sigue clickeable
@@ -111,12 +124,18 @@ class NotificadorTelegram:
         try:
             respuesta = requests.post(self._url("sendMessage"), json=payload, timeout=TIMEOUT)
         except requests.RequestException as error:
-            print(f"[telegram] Error de red al enviar: {error}")
+            print(f"[telegram] Error de red al enviar a {chat_id}: {error}")
             return False
         if respuesta.status_code != 200:
-            print(f"[telegram] Telegram respondió {respuesta.status_code}: {respuesta.text}")
+            print(f"[telegram] Telegram respondió {respuesta.status_code} para {chat_id}: {respuesta.text}")
             return False
         return True
+
+    def _enviar_texto(self, texto: str) -> bool:
+        """Envía el mensaje a todos los destinatarios. True solo si todos lo aceptan."""
+        # Se envía a todos aunque alguno falle, para no privar al resto de la alerta.
+        resultados = [self._enviar_a_uno(chat_id, texto) for chat_id in self.chat_ids]
+        return all(resultados)
 
     def enviar_alerta(self, post: dict, resumen: dict | None = None) -> bool:
         """Envía la alerta de un concurso detectado."""

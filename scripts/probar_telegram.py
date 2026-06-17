@@ -26,6 +26,7 @@ RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
 from notifier.telegram import NotificadorTelegram  # noqa: E402
+from scheduler import _destinatarios_telegram  # noqa: E402
 
 RUTA_CONFIG = RAIZ / "config" / "settings.yaml"
 
@@ -40,12 +41,13 @@ def main() -> None:
     config = yaml.safe_load(RUTA_CONFIG.read_text(encoding="utf-8")) or {}
     telegram = config.get("telegram", {})
     bot_token = telegram.get("bot_token")
-    chat_id = telegram.get("chat_id")
+    destinatarios = _destinatarios_telegram(telegram)
 
-    if not bot_token or not chat_id:
-        sys.exit("Falta telegram.bot_token o telegram.chat_id en config/settings.yaml.")
+    if not bot_token or not destinatarios:
+        sys.exit("Falta telegram.bot_token o telegram.chat_id / chat_ids en config/settings.yaml.")
 
-    notificador = NotificadorTelegram(bot_token, chat_id)
+    print(f"Destinatarios configurados: {', '.join(destinatarios)}")
+    notificador = NotificadorTelegram(bot_token, destinatarios)
 
     print("1. Verificando el bot (getMe)...")
     if not notificador.probar_conexion():

@@ -16,7 +16,13 @@ apify:
 
 telegram:
   bot_token: ""          # Token del bot creado con @BotFather
-  chat_id: ""            # chat_id destino (el tuyo para pruebas; el del cliente en producción)
+  chat_id: ""            # chat_id destino principal (el tuyo). Compatibilidad con la config anterior.
+  # Para enviar a VARIAS personas (ej. tú + el cliente), lista aquí todos los chat_id.
+  # Se combina con chat_id de arriba (sin duplicar). Cada persona debe haberle
+  # escrito antes al bot. Para averiguar un chat_id: python scripts\obtener_chat_ids.py
+  chat_ids: []
+    # - "111111111"      # tú
+    # - "222222222"      # el cliente
 
 # --- Fase 2: clasificación con IA (cuenta de Anthropic, aparte de Apify) --------
 # La IA se ACTIVA sola en cuanto api_key tenga valor. Vacía = el sistema corre solo
