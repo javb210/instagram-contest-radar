@@ -18,6 +18,8 @@ Apify), no el número de corridas.
 
 from __future__ import annotations
 
+from datetime import date
+
 from storage.database import BaseDatos
 
 
@@ -43,9 +45,16 @@ class ControlPresupuesto:
         costo = self.estimar_costo(num_resultados)
         self.db.registrar_gasto(servicio, costo, llamadas=num_resultados)
 
-    def gasto_hoy(self, servicio: str | None = None) -> float:
-        """Devuelve el gasto acumulado de hoy (de un servicio o de todos)."""
-        return self.db.gasto_del_dia(servicio)
+    def gasto_hoy(
+        self, servicio: str | None = None, fecha: date | None = None
+    ) -> float:
+        """Devuelve el gasto acumulado de un día (de un servicio o de todos).
+
+        Por defecto usa el día local (hoy). Se acepta `fecha` para que el resumen
+        de fin de día pueda consultar el día correcto cuando la tarea se recupera
+        pasada la medianoche.
+        """
+        return self.db.gasto_del_dia(servicio, fecha)
 
     def supera_limite(self, servicio: str | None = None) -> bool:
         """Devuelve True si el gasto de hoy ya alcanzó o superó el techo diario."""

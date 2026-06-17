@@ -315,16 +315,30 @@ def construir_xml_busqueda() -> str:
 
 def construir_xml_resumen() -> str:
     """
-    XML de la tarea de RESUMEN (`ConcursoRadarResumen`): un único CalendarTrigger a
-    HORA_RESUMEN que corre `main.py --resumen` (sin Apify, costo cero). Sin LogonTrigger
-    (no es crítica) y sin WakeToRun (no se despierta el PC solo para un mensaje).
+    XML de la tarea de RESUMEN (`ConcursoRadarResumen`): corre `main.py --resumen`
+    (sin Apify, costo cero) a HORA_RESUMEN + un LogonTrigger de respaldo.
+
+    `WakeToRun=true` despierta el PC suspendido (S3) a las 21:00 para mandar el
+    resumen: es gratis (no llama a Apify), así que sí vale despertarlo. El
+    LogonTrigger cubre el caso de PC apagado a esa hora (se manda al siguiente
+    inicio de sesión). Ambos disparos no duplican el mensaje: `enviar_resumen_diario`
+    lleva un candado por día en la tabla `estado` (`ultimo_resumen_fecha`) y, si la
+    recuperación cae pasada la medianoche, reporta el día correcto (el que terminó),
+    no el día en curso vacío.
     """
+    usuario = _escapar_xml(usuario_actual())
+    triggers = _triggers_xml([HORA_RESUMEN]) + "\n" + (
+        "    <LogonTrigger>\n"
+        "      <Enabled>true</Enabled>\n"
+        f"      <UserId>{usuario}</UserId>\n"
+        "    </LogonTrigger>"
+    )
     return _construir_xml(
         nombre=NOMBRE_TAREA_RESUMEN,
         descripcion="Concurso Radar: resumen diario por Telegram (sin costo Apify).",
-        triggers=_triggers_xml([HORA_RESUMEN]),
+        triggers=triggers,
         argumentos=_escapar_xml(f'"{MAIN_PY}" --resumen'),
-        wake_to_run=False,
+        wake_to_run=True,
     )
 
 

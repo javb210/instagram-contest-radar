@@ -238,6 +238,28 @@ def formatear_resumen(datos: dict, gasto_usd: float) -> str:
     )
 
 
+def _fecha_objetivo_resumen(config: dict, ahora: datetime | None = None) -> date:
+    """
+    Día que el resumen debe reportar.
+
+    La tarea `ConcursoRadarResumen` está programada a `resumen.hora` (21:00). Si
+    `StartWhenAvailable` la recupera pasada la medianoche (el PC estuvo apagado/
+    suspendido a esa hora), `date.today()` apuntaría al día siguiente, todavía vacío,
+    y el cliente recibiría un resumen en ceros del día equivocado. Por eso: si la hora
+    actual es ANTERIOR a la hora programada, el resumen corresponde al día anterior
+    (la tarde que acaba de terminar); de lo contrario, al día en curso.
+    """
+    ahora = ahora or datetime.now()
+    hora_str = str(config.get("resumen", {}).get("hora", "21:00"))
+    try:
+        hora_corte = int(hora_str.split(":")[0])
+    except (ValueError, IndexError):
+        hora_corte = 21
+    if ahora.hour < hora_corte:
+        return ahora.date() - timedelta(days=1)
+    return ahora.date()
+
+
 def enviar_resumen_diario() -> dict:
     """
     Lee el registro de actividad del día y manda el resumen por Telegram.
@@ -257,11 +279,44 @@ def enviar_resumen_diario() -> dict:
 
     log.info("Concurso Radar: preparando el resumen diario.")
     db, _buscador, notificador, tracker = _construir_componentes(config)
-    datos = db.resumen_dia()
-    gasto = tracker.gasto_hoy("apify")
-    notificador.enviar_heartbeat(formatear_resumen(datos, gasto))
-    log.info("Resumen diario enviado: %s, gasto $%.4f USD.", datos, gasto)
+    fecha = _fecha_objetivo_resumen(config)
+    fecha_iso = fecha.isoformat()
+
+    # Candado anti-duplicado: la tarea de resumen tiene un LogonTrigger de respaldo
+    # (cubre el caso de PC apagado a la hora), así que puede dispararse varias veces.
+    # Igual que el heartbeat, mandamos el resumen UNA sola vez por día reportado.
+    if db.leer_estado("ultimo_resumen_fecha") == fecha_iso:
+        log.info("Resumen del %s ya fue enviado; se omite el duplicado.", fecha_iso)
+        return db.resumen_dia(fecha)
+
+    datos = db.resumen_dia(fecha)
+    gasto = tracker.gasto_hoy("apify", fecha)
+    enviado = notificador.enviar_heartbeat(formatear_resumen(datos, gasto))
+    if enviado:
+        db.guardar_estado("ultimo_resumen_fecha", fecha_iso)
+        log.info("Resumen diario enviado: %s, gasto $%.4f USD.", datos, gasto)
+    else:
+        log.warning("No se pudo enviar el resumen del %s; se reintentará.", fecha_iso)
     return datos
+
+
+def _destinatarios_telegram(telegram_cfg: dict) -> list:
+    """Reúne los chats destino desde la config.
+
+    Acepta dos formas, combinables:
+      - `chat_id`:  un único id (compatibilidad con la config anterior).
+      - `chat_ids`: una lista de ids (varios destinatarios, ej. tú + el cliente).
+    Devuelve la lista combinada sin duplicados, conservando el orden.
+    """
+    destinatarios: list[str] = []
+    uno = telegram_cfg.get("chat_id")
+    if uno not in (None, ""):
+        destinatarios.append(str(uno).strip())
+    for c in telegram_cfg.get("chat_ids") or []:
+        if str(c).strip():
+            destinatarios.append(str(c).strip())
+    # quita duplicados conservando el orden
+    return list(dict.fromkeys(destinatarios))
 
 
 def _construir_componentes(
@@ -271,7 +326,7 @@ def _construir_componentes(
     db = BaseDatos(config["base_datos"]["ruta"])
     buscador = BuscadorInstagram(config["apify"]["token"], config["apify"]["actor_id"])
     notificador = NotificadorTelegram(
-        config["telegram"]["bot_token"], config["telegram"]["chat_id"]
+        config["telegram"]["bot_token"], _destinatarios_telegram(config["telegram"])
     )
     tracker = ControlPresupuesto(
         db,
