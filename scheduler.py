@@ -31,6 +31,7 @@ from filters.keywords import es_candidato
 from notifier.telegram import NotificadorTelegram
 from power import liberar, mantener_despierto
 from searchers.instagram_search import BuscadorInstagram
+from searchers.web_search import BuscadorWeb
 from storage.database import BaseDatos
 
 RAIZ = Path(__file__).resolve().parent
@@ -206,6 +207,80 @@ def ejecutar_ciclo(
     return resumen
 
 
+def ejecutar_ciclo_web(
+    config: dict,
+    db: BaseDatos,
+    buscador_web: BuscadorWeb,
+    notificador: NotificadorTelegram,
+) -> dict:
+    """
+    Ejecuta la fuente WEB (piloto): Claude busca concursos colombianos recientes con
+    T&C y los clasifica en una sola llamada; cada candidato relevante se avisa como
+    una alerta más. Reusa la dedup por URL, el notificador y la base de la Fase 1.
+
+    El `notificador` lo arma `_notificador_web` según `web.telegram_chat_id`: a un solo
+    chat (modo piloto a una persona) o a TODOS los destinatarios (igual que Instagram).
+
+    Diferencias con `ejecutar_ciclo` (Instagram):
+      - El candidato ya viene clasificado por la IA dentro de la búsqueda, así que NO
+        pasa por `es_candidato` ni por el clasificador: se avisa directo con su resumen.
+      - El gasto se registra bajo el servicio "web" con su propia tarifa (Anthropic,
+        cuenta APARTE). NO cuenta contra el tope diario de Apify ni lo pausa.
+      - Fail-soft: si la búsqueda falla, se avisa por heartbeat y se sigue; nunca
+        tumba el ciclo de Instagram.
+    """
+    resumen = {"candidatos": 0, "alertas": 0, "estado": "ok"}
+
+    try:
+        candidatos = buscador_web.buscar()
+    except RuntimeError as error:
+        log.error("Falló la búsqueda web: %s", error)
+        notificador.enviar_heartbeat(f"⚠️ Concurso Radar: error en la búsqueda web.\n{error}")
+        resumen["estado"] = "error_web"
+        return resumen
+
+    # Registrar el gasto web (cuenta de Anthropic, separada de Apify: no toca el tope
+    # de $5/mes). Costo real = tarifa de búsquedas ($10/1000) + costo de tokens del
+    # modelo (con Sonnet leyendo páginas, los tokens pesan tanto o más que la búsqueda).
+    web_cfg = config.get("web", {}) or {}
+    num_busquedas = buscador_web.ultimo_num_busquedas
+    costo = (num_busquedas / 1000.0) * float(web_cfg.get("costo_por_mil_busquedas_usd", 10.0))
+    costo += (buscador_web.ultimo_uso_entrada / 1_000_000.0) * float(
+        web_cfg.get("costo_por_millon_tokens_entrada_usd", 3.0)
+    )
+    costo += (buscador_web.ultimo_uso_salida / 1_000_000.0) * float(
+        web_cfg.get("costo_por_millon_tokens_salida_usd", 15.0)
+    )
+    db.registrar_gasto("web", costo, llamadas=num_busquedas)
+
+    resumen["candidatos"] = len(candidatos)
+    for post in candidatos:
+        if db.ya_visto(post["url"]):
+            continue
+        if notificador.enviar_alerta(post, post.get("resumen")):
+            db.guardar_concurso(
+                post["cuenta"], post["caption"], post["url"],
+                plataforma="web", fecha_post=post["fecha"],
+            )
+            db.marcar_visto(post["url"], "web")
+            resumen["alertas"] += 1
+            log.info("Alerta web enviada: %s", post["url"])
+        else:
+            log.error(
+                "No se pudo enviar la alerta web de %s; se reintentará el próximo ciclo.",
+                post["url"],
+            )
+
+    # Acumular las alertas web en el ledger diario (insumo del resumen de las 21:00).
+    db.registrar_alertas_web(resumen["alertas"])
+
+    log.info(
+        "Ciclo web terminado: %d candidatos, %d alertas, %d búsquedas. Gasto web hoy: $%.4f USD.",
+        resumen["candidatos"], resumen["alertas"], num_busquedas, db.gasto_del_dia("web"),
+    )
+    return resumen
+
+
 def heartbeat_diario(notificador: NotificadorTelegram, tracker: ControlPresupuesto) -> None:
     """Envía el mensaje diario de 'sigo activo', con el gasto del día."""
     gasto = tracker.gasto_hoy("apify")
@@ -215,11 +290,14 @@ def heartbeat_diario(notificador: NotificadorTelegram, tracker: ControlPresupues
     log.info("Heartbeat diario enviado.")
 
 
-def formatear_resumen(datos: dict, gasto_usd: float) -> str:
+def formatear_resumen(datos: dict, gasto_usd: float, web_gasto_usd: float = 0.0) -> str:
     """
     Arma el texto del resumen diario para Telegram (HTML). `datos` viene de
     `BaseDatos.resumen_dia`. Si el día no tuvo corridas (PC apagado/suspendido a
     las horas programadas), lo dice de forma explícita en vez de mostrar ceros secos.
+
+    Incluye una línea de la fuente WEB (concursos hallados y gasto Anthropic del día,
+    separado del de Apify) para no tener que mirar la consola de Anthropic.
     """
     fecha = datos.get("fecha", "")
     corridas = datos.get("corridas", 0)
@@ -233,8 +311,10 @@ def formatear_resumen(datos: dict, gasto_usd: float) -> str:
         f"📊 <b>Resumen del día</b> — {fecha}\n\n"
         f"🔁 Corridas: {corridas}\n"
         f"👀 Posts nuevos revisados: {datos.get('nuevos', 0)}\n"
-        f"🏆 Alertas enviadas: {datos.get('alertas', 0)}\n"
-        f"💰 Gasto Apify hoy: ${gasto_usd:.2f} USD"
+        f"🏆 Alertas Instagram: {datos.get('alertas', 0)}\n"
+        f"🌐 Concursos web: {datos.get('alertas_web', 0)}\n"
+        f"💰 Gasto Apify hoy: ${gasto_usd:.2f} USD\n"
+        f"💰 Gasto web (Anthropic) hoy: ${web_gasto_usd:.2f} USD"
     )
 
 
@@ -291,7 +371,8 @@ def enviar_resumen_diario() -> dict:
 
     datos = db.resumen_dia(fecha)
     gasto = tracker.gasto_hoy("apify", fecha)
-    enviado = notificador.enviar_heartbeat(formatear_resumen(datos, gasto))
+    gasto_web = tracker.gasto_hoy("web", fecha)
+    enviado = notificador.enviar_heartbeat(formatear_resumen(datos, gasto, gasto_web))
     if enviado:
         db.guardar_estado("ultimo_resumen_fecha", fecha_iso)
         log.info("Resumen diario enviado: %s, gasto $%.4f USD.", datos, gasto)
@@ -317,6 +398,38 @@ def _destinatarios_telegram(telegram_cfg: dict) -> list:
             destinatarios.append(str(c).strip())
     # quita duplicados conservando el orden
     return list(dict.fromkeys(destinatarios))
+
+
+def _notificador_web(config: dict) -> NotificadorTelegram | None:
+    """
+    Notificador de la fuente WEB. El enrutamiento depende de `web.telegram_chat_id`:
+      - PUESTO  → las alertas web van SOLO a ese chat (modo piloto a una persona, p. ej.
+        para no meterle ruido a los clientes mientras se mide la precisión).
+      - VACÍO   → van a TODOS los destinatarios, igual que las de Instagram
+        (`telegram.chat_id` + `telegram.chat_ids`), para que el cliente también juzgue.
+    Devuelve None (y la web se omite) si no hay ningún destinatario resoluble; las
+    alertas de Instagram no se ven afectadas.
+    """
+    tg = config.get("telegram", {}) or {}
+    uno = str((config.get("web", {}) or {}).get("telegram_chat_id") or "").strip()
+    destinos = [uno] if uno else _destinatarios_telegram(tg)
+    if not destinos:
+        log.warning("Fuente web activa pero sin destinatarios de Telegram; se omite la web.")
+        return None
+    return NotificadorTelegram(tg["bot_token"], destinos)
+
+
+def _web_pendiente_hoy(config: dict, db: BaseDatos) -> bool:
+    """
+    Devuelve True si la fuente web aún debe correr hoy. Con `web.una_vez_al_dia` (por
+    defecto true), la web corre UNA sola vez por día —en la primera corrida exitosa del
+    día—, a diferencia de Instagram que corre ~2 veces. Los concursos web (campañas con
+    T&C) no son urgentes al minuto, así que 1×/día basta y recorta a la mitad el costo y
+    el ruido. Si `una_vez_al_dia` es false, la web corre en cada ciclo (hasta 2×/día).
+    """
+    if not (config.get("web", {}) or {}).get("una_vez_al_dia", True):
+        return True
+    return db.leer_estado("ultima_corrida_web_fecha") != date.today().isoformat()
 
 
 def _construir_componentes(
@@ -350,6 +463,35 @@ def construir_clasificador(config: dict) -> ClasificadorIA | None:
         api_key,
         modelo=cfg.get("modelo"),
         criterio_relevancia=cfg.get("criterio_relevancia"),
+    )
+
+
+def construir_buscador_web(config: dict) -> BuscadorWeb | None:
+    """
+    Construye la fuente de búsqueda web (piloto) SOLO si `web.activo` es true Y hay
+    `anthropic.api_key`. En cualquier otro caso devuelve None y el sistema corre
+    exactamente igual (solo Instagram). Así la fuente web es opt-in: se enciende con
+    el flag de config sin tocar código. Reutiliza la api_key/modelo de Anthropic
+    (misma cuenta de la Fase 2, separada del tope de Apify).
+    """
+    web = config.get("web", {}) or {}
+    if not web.get("activo", False):
+        return None
+    api_key = (config.get("anthropic", {}) or {}).get("api_key", "")
+    if not api_key:
+        return None
+    # Modelo de la fuente web: si hay `web.modelo` se usa ese (buscar + leer T&C +
+    # juzgar vigencia es más exigente que clasificar un caption, así que conviene un
+    # modelo más capaz); si no, cae al modelo del clasificador (`anthropic.modelo`).
+    modelo_web = web.get("modelo") or (config.get("anthropic", {}) or {}).get("modelo")
+    return BuscadorWeb(
+        api_key,
+        modelo=modelo_web,
+        consultas=web.get("consultas"),
+        dias_recientes=web.get("dias_recientes", 7),
+        criterio=web.get("criterio"),
+        max_busquedas=web.get("max_busquedas", 5),
+        pais=web.get("pais"),
     )
 
 
@@ -450,6 +592,21 @@ def correr_una_vez() -> dict:
                 log.info("Fase 2 activa: clasificación con IA habilitada (modelo %s).", clasificador.modelo)
             resumen = ejecutar_ciclo(config, db, buscador, notificador, tracker, clasificador)
             _heartbeat_si_toca(config, db, notificador, tracker)
+            # Fuente web (piloto, opt-in): corre tras Instagram, bajo el mismo candado
+            # anti-costo. Su gasto va a la cuenta de Anthropic, aparte del tope de Apify.
+            buscador_web = construir_buscador_web(config)
+            if buscador_web is not None:
+                if not _web_pendiente_hoy(config, db):
+                    log.info("Fuente web: ya corrió hoy (web una vez al día); se omite.")
+                else:
+                    notificador_web = _notificador_web(config)
+                    if notificador_web is not None:
+                        log.info("Fuente web activa: búsqueda de concursos por web (Anthropic).")
+                        res_web = ejecutar_ciclo_web(config, db, buscador_web, notificador_web)
+                        # Solo se marca el día como hecho si la búsqueda salió bien, para
+                        # que un fallo pueda reintentarse en la 2.ª corrida del día.
+                        if res_web.get("estado") == "ok":
+                            db.guardar_estado("ultima_corrida_web_fecha", date.today().isoformat())
     finally:
         liberar()
 

@@ -37,6 +37,34 @@ anthropic:
     mecánica de participación, ofertas o descuentos, empleos, webinars o cursos, ni
     dinámicas de muy bajo valor.
 
+# --- Fuente WEB (piloto): búsqueda de concursos con T&C vía Anthropic -----------
+# Automatiza el "googleo" manual de páginas de términos y condiciones. Usa la
+# herramienta de búsqueda web de Claude sobre la MISMA cuenta de Anthropic de arriba
+# (separada de Apify; NO cuenta contra el tope de $5/mes). Arranca APAGADA: enciéndela
+# con 'activo: true' cuando vayas a correr el piloto. Costo aprox: $10/1000 búsquedas.
+web:
+  activo: false                      # opt-in. En false, el sistema corre solo con Instagram.
+  telegram_chat_id: ""               # vacío = alertas web a TODOS (igual que Instagram). Pon un
+                                     # chat para enviarlas SOLO a esa persona (modo piloto a uno).
+  una_vez_al_dia: true               # la web corre 1 sola vez/día (en la 1ª corrida); IG sigue ~2.
+  dias_recientes: 7                  # ventana de "reciente" para los concursos a buscar
+  pais: ""                           # localizar la búsqueda (ISO). OJO: la herramienta NO soporta
+                                     # "CO". Déjalo vacío: el foco colombiano lo dan el prompt/criterio.
+  modelo: ""                         # modelo SOLO para la web. Vacío = usa anthropic.modelo (Haiku).
+                                     # Para mejor juicio de vigencia: "claude-sonnet-4-6".
+  max_busquedas: 5                   # tope de búsquedas web por corrida (perilla de costo)
+  costo_por_mil_busquedas_usd: 10.0  # tarifa de la herramienta web_search de Anthropic
+  costo_por_millon_tokens_entrada_usd: 3.0   # tarifa del modelo (default Sonnet 4.6 entrada)
+  costo_por_millon_tokens_salida_usd: 15.0   # tarifa del modelo (default Sonnet 4.6 salida)
+  consultas:                         # consultas semilla que guían la búsqueda
+    - "concurso terminos y condiciones Colombia"
+    - "sorteo bases y condiciones marca Colombia"
+    - "gana premio dinamica Colombia terminos y condiciones"
+  criterio: >                        # qué cuenta como relevante (estricto: la web es ruidosa)
+    Solo concursos o sorteos VIGENTES de marcas en Colombia, con T&C publicados en los
+    últimos días y un premio real. Excluir plantillas legales, páginas de ayuda,
+    concursos vencidos, ofertas/descuentos y vacantes de empleo o cursos.
+
 # --- Cuentas de Instagram a monitorear -------------------------------------
 # Esta lista cambia con el tiempo: agregar o quitar cuentas aquí.
 cuentas:

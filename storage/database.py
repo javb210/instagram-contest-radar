@@ -103,6 +103,15 @@ class BaseDatos:
                 );
                 """
             )
+            # Migración idempotente: columna de alertas de la fuente web en el ledger
+            # diario. Las bases creadas antes de la fuente web no la tienen; el ALTER
+            # falla con OperationalError si ya existe, y se ignora.
+            try:
+                conexion.execute(
+                    "ALTER TABLE actividad_diaria ADD COLUMN alertas_web INTEGER DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass
 
     # ------------------------------------------------------------------ #
     # Deduplicación (tabla posts_vistos)
@@ -242,6 +251,23 @@ class BaseDatos:
                 (dia, posts, nuevos, alertas),
             )
 
+    def registrar_alertas_web(self, alertas: int, fecha: date | None = None) -> None:
+        """
+        Suma alertas de la fuente WEB al ledger del día (clave fecha local, igual que
+        `registrar_corrida`). Se llama una vez por ciclo web. Usa UPSERT para crear la
+        fila del día si aún no existe.
+        """
+        dia = (fecha or date.today()).isoformat()
+        with self._conexion() as conexion:
+            conexion.execute(
+                """
+                INSERT INTO actividad_diaria (fecha, alertas_web)
+                VALUES (?, ?)
+                ON CONFLICT(fecha) DO UPDATE SET alertas_web = alertas_web + excluded.alertas_web
+                """,
+                (dia, alertas),
+            )
+
     def contar_corridas_hoy(self, fecha: date | None = None) -> int:
         """Devuelve cuántas corridas exitosas se llevan en el día (0 si ninguna)."""
         dia = (fecha or date.today()).isoformat()
@@ -260,18 +286,22 @@ class BaseDatos:
         dia = (fecha or date.today()).isoformat()
         with self._conexion() as conexion:
             fila = conexion.execute(
-                "SELECT corridas, posts, nuevos, alertas "
+                "SELECT corridas, posts, nuevos, alertas, COALESCE(alertas_web, 0) AS alertas_web "
                 "FROM actividad_diaria WHERE fecha = ?",
                 (dia,),
             ).fetchone()
         if fila is None:
-            return {"fecha": dia, "corridas": 0, "posts": 0, "nuevos": 0, "alertas": 0}
+            return {
+                "fecha": dia, "corridas": 0, "posts": 0,
+                "nuevos": 0, "alertas": 0, "alertas_web": 0,
+            }
         return {
             "fecha": dia,
             "corridas": int(fila["corridas"]),
             "posts": int(fila["posts"]),
             "nuevos": int(fila["nuevos"]),
             "alertas": int(fila["alertas"]),
+            "alertas_web": int(fila["alertas_web"]),
         }
 
     # ------------------------------------------------------------------ #

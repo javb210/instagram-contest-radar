@@ -58,7 +58,7 @@ concurso-radar/
 │   └── settings.example.yaml    # plantilla; copiar a settings.yaml (no versionado)
 ├── searchers/
 │   ├── instagram_search.py      # Apify — núcleo (Fase 1)
-│   └── brave_search.py          # búsquedas web de Google (secundario)
+│   └── web_search.py            # búsqueda web de concursos vía Anthropic (secundario, piloto)  ✓
 ├── filters/
 │   └── keywords.py              # filtro por palabras clave (Fase 1)
 ├── classifier/
