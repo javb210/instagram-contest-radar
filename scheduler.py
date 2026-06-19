@@ -509,7 +509,7 @@ def _motivo_para_omitir(config: dict, db: BaseDatos) -> str | None:
     - `min_horas_entre_corridas` (SEPARACIÓN): evita dos corridas pegadas, p. ej. la
       del disparador por inicio de sesión seguida de un slot fijo. Si un slot cae
       dentro de esta ventana se omite; el slot de tarde extra (ver install.py:HORAS)
-      lo repone una vez pasada la separación, de modo que no se pierde la 2.ª corrida
+      lo repone una vez pasada la separación, de modo que no se pierde la 3.ª corrida
       del día (el problema que tenía el candado anterior, que solo descartaba).
 
     Se evalúa el tope ANTES que la separación: una vez completado el cupo del día,

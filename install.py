@@ -39,13 +39,13 @@ from pathlib import Path
 
 # --- Constantes del proyecto -----------------------------------------------
 NOMBRE_TAREA = "ConcursoRadar"
-# Horas (24h, hora local del PC) que DISPARAN una búsqueda. NO son 3 corridas: el
-# tope 'max_corridas_por_dia' (settings.yaml) limita a 2 búsquedas pagadas/día. Las
-# 11:00 y 18:00 son el camino normal; las 20:00 son un SLOT DE TARDE EXTRA que repone
-# la 2.ª corrida cuando el PC arrancó en la tarde y la de las 18:00 cayó dentro de la
-# separación mínima (min_horas_entre_corridas). En un día normal, las 20:00 se omiten
-# por cupo lleno. Ver el candado _motivo_para_omitir en scheduler.py.
-HORAS = ["11:00", "18:00", "20:00"]
+# Horas (24h, hora local del PC) que DISPARAN una búsqueda. Las 11:00, 15:00 y 18:00
+# son las 3 corridas normales del día (tope 'max_corridas_por_dia'=3 en settings.yaml);
+# las 20:00 son un SLOT DE TARDE EXTRA que repone la 3.ª corrida cuando el PC arrancó en
+# la tarde y algún slot anterior cayó dentro de la separación mínima
+# (min_horas_entre_corridas). En un día normal (PC prendido), las 20:00 se omiten por
+# cupo lleno. Ver el candado _motivo_para_omitir en scheduler.py.
+HORAS = ["11:00", "15:00", "18:00", "20:00"]
 
 # Tarea aparte que manda el resumen del día (main.py --resumen). Sin costo Apify.
 NOMBRE_TAREA_RESUMEN = "ConcursoRadarResumen"
@@ -391,17 +391,17 @@ def instalar() -> None:
         )
         sys.exit(1)
 
-    horas_txt = " y ".join(HORAS)
+    horas_txt = ", ".join(HORAS)
     print(
         textwrap.dedent(
             f"""\
 
             Qué pasa ahora:
-              - El sistema BUSCA a las {horas_txt} (hora local), todos los días. Son
-                disparos posibles, no 3 corridas: un tope de 2 búsquedas/día y una
-                separación mínima de 5h dejan ~2 corridas reales bien espaciadas.
-                Las 20:00 son un slot de respaldo: reponen la 2.ª corrida los días en
-                que el PC arrancó en la tarde y la de las 18:00 quedó muy pegada.
+              - El sistema BUSCA a las {horas_txt} (hora local), todos los días. En un
+                día normal corre 3 veces (11:00, 15:00 y 18:00): un tope de 3 búsquedas/día
+                y una separación mínima de 2h dejan 3 corridas bien espaciadas.
+                Las 20:00 son un slot de respaldo: reponen la 3.ª corrida los días en
+                que el PC arrancó en la tarde y algún slot anterior quedó muy pegado.
               - Si el PC está suspendido a esa hora, se DESPIERTA solo para buscar
                 (WakeToRun) y vuelve a dormir. Funciona enchufado o en batería.
               - Si el PC estaba APAGADO a la hora, la corrida se ejecuta apenas lo
